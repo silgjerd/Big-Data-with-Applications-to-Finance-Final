@@ -19,6 +19,7 @@ library(scales)
 library(ROCR)
 library(pROC)
 library(xgboost)
+library(randomForest)
 library(DMwR)
 library(corrplot)
 graphics.off() #reset graphics
@@ -38,9 +39,6 @@ corrplot(cor(train), method="color")
 
 
 
-
-
-
 xtrain <- train[,-1]
 ytrain <- train[,1]
 xtest <- test[,-1]
@@ -50,29 +48,57 @@ ytest <- test[,1]
 # Modelling
 
 #Logistic regression
-ytrain <- as.factor(ytrain)
-ytest <- as.factor(ytest)
+train$default <- as.factor(train$default)
+test$default <- as.factor(test$default)
 
-m_logit <- glm(default ~ .-default,
-               data = train,
-               family = binomial)
+m_log <- glm(default ~ .-default,
+             data = train,
+             family = binomial)
 
 #XGBoost
-m_xgb <- 
+m_xgb <- xgboost(data = data.matrix(train[,-1]),
+                 label = data.matrix(train$default),
+                 max.depth = 2,
+                 eta = 1,
+                 nthread = 2,
+                 nround = 2,
+                 objective = "binary:logistic")
 
 
 #Random forest
-m_rand <- 
+m_ran <- randomForest(default ~ .-default,
+                      data = train)
 
 
-# Predictions
-preds <- tibble("logit_s" = predict(m_logit, xtest, type = "response"))
+# Predictions, model inference
+preds <- tibble("log_prob" = as.numeric(as.character(predict(m_log, test, type = "response"))),
+                "xgb_prob" = predict(m_xgb, data.matrix(test[,-1])),
+                "ran_prob" = predict(m_ran, test, type = "prob")[,2])
+
+
+
+
+predict(m_ran, test, type = "prob")
 
 preds <- preds %>%
-  mutate(logit_p = as.factor(if_else(logit_s > 0.5, 1, 0)))
+  mutate(log_pred = as.factor(if_else(log_prob > 0.5, 1, 0))) %>%
+  mutate(xgb_pred = as.factor(if_else(xgb_prob > 0.5, 1, 0))) %>%
+  mutate(ran_pred = as.factor(if_else(ran_prob > 0.5, 1, 0)))
 
-confusionMatrix(preds$logit_p, ytest)
 
+# Confusion matrix
+confusionMatrix(preds$log_pred, test$default, positive = "1")
+confusionMatrix(preds$xgb_pred, test$default, positive = "1")
+confusionMatrix(preds$ran_pred, test$default, positive = "1")
+
+
+
+
+
+
+
+
+# ROC plot
 rocplot <- function(pred, truth, ...) {
   predob = prediction(pred, truth)
   perf = performance(predob, "tpr", "fpr")
@@ -82,6 +108,15 @@ rocplot <- function(pred, truth, ...) {
   text(x=0.8, y=0.1, labels = paste("AUC =", area))
   segments(x0=0, y0=0, x1=1, y1=1, col="gray", lty=2)
 }
-
 rocplot(preds, test$default, col="blue")
+
+
+# Scatterplot
+ggplot(preds, aes()) +
+  geom_point(aes(x = log_prob, y = xgb_prob)) +
+  theme_classic()
+
+
+
+
 
