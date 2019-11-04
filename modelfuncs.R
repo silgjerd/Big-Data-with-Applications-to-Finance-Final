@@ -6,7 +6,7 @@ toMatrix <- function(df){
   rownames(tf) <- NULL
   return(tf)}
 
-ifExistsElseNull <- function(x){
+ifExistsElseNull <- function(x){ #if variable exists, write variable, else write blank
   return(if(exists(deparse(substitute(x)))) {x} else {""})}
 
 
@@ -16,7 +16,7 @@ evaluateAndWrite <- function(prob, model.name, output.file) {
   pred <- if_else(prob >= threshold, 1, 0) #model predictions using threshold
   conm <- confusionMatrix(as.factor(pred), test$default, positive = "1") #confusion matrix
   mroc <- roc(test$default, prob) #roc object
-  modeloutput <- tibble("nn" = conm$table[1],
+  modeloutput <- tibble("nn" = conm$table[1], #tibble containing all data
                         "pn" = conm$table[2],
                         "np" = conm$table[3],
                         "pp" = conm$table[4],
@@ -39,134 +39,40 @@ evaluateAndWrite <- function(prob, model.name, output.file) {
                         "Model" = model.name,
                         "Time_seconds" = round(Sys.time() - time.start, 2),
                         "Executed" = Sys.time())
-  write.table(modeloutput,
+  write.table(modeloutput, #writing (appending) the data to csv file
               file = output.file,
               append = T,
               row.names = F,
               col.names = !file.exists(output.file),
               sep = ",")}
 
-
-# Model performance evaluation and writing metrics to csv file
-evaluateAndWriteLog <- function(prob, output.file) {
   
-  pred <- if_else(prob >= threshold, 1, 0) #model predictions using threshold
-  conm <- confusionMatrix(as.factor(pred), test$default, positive = "1") #confusion matrix
-  mroc <- roc(test$default, prob) #roc object
-  modeloutput <- tibble("nn" = conm$table[1],
-                        "pn" = conm$table[2],
-                        "np" = conm$table[3],
-                        "pp" = conm$table[4],
-                        "Sensitivity" = conm$byClass[[1]],
-                        "Specificity" = conm$byClass[[2]],
-                        "Accuracy" = conm$overall[[1]],
-                        "Balanced_Accuracy" = conm$byClass[[11]],
-                        "AUC" = auc(mroc),
-                        "Threshold" = threshold,
-                        "Resample" = resample,
-                        "Model" = "log",
-                        "Time_seconds" = Sys.time() - time.start,
-                        "Executed" = Sys.time())
-  write.table(modeloutput,
-              file = output.file,
-              append = T,
-              row.names = F,
-              col.names = !file.exists(output.file),
-              sep = ",")}
-
-
-# Model performance evaluation and writing metrics to csv file
-evaluateAndWriteRan <- function(prob, output.file) {
-  
-  pred <- if_else(prob >= threshold, 1, 0) #model predictions using threshold
-  conm <- confusionMatrix(as.factor(pred), test$default, positive = "1") #confusion matrix
-  mroc <- roc(test$default, prob) #roc object
-  modeloutput <- tibble("nn" = conm$table[1],
-                        "pn" = conm$table[2],
-                        "np" = conm$table[3],
-                        "pp" = conm$table[4],
-                        "Sensitivity" = conm$byClass[[1]],
-                        "Specificity" = conm$byClass[[2]],
-                        "Accuracy" = conm$overall[[1]],
-                        "Balanced_Accuracy" = conm$byClass[[11]],
-                        "AUC" = auc(mroc),
-                        "Threshold" = threshold,
-                        "Resample" = resample,
-                        "Trees" = trees,
-                        "Mtry" = mtry,
-                        "Model" = "ran",
-                        "Time_seconds" = Sys.time() - time.start,
-                        "Executed" = Sys.time())
-  write.table(modeloutput,
-              file = output.file,
-              append = T,
-              row.names = F,
-              col.names = !file.exists(output.file),
-              sep = ",")}
-
-# Model performance evaluation and writing metrics to csv file
-evaluateAndWriteXgb <- function(prob, output.file) {
-  
-  pred <- if_else(prob >= threshold, 1, 0) #model predictions using threshold
-  conm <- confusionMatrix(as.factor(pred), test$default, positive = "1") #confusion matrix
-  mroc <- roc(test$default, prob) #roc object
-  modeloutput <- tibble("nn" = conm$table[1],
-                        "pn" = conm$table[2],
-                        "np" = conm$table[3],
-                        "pp" = conm$table[4],
-                        "Sensitivity" = conm$byClass[[1]],
-                        "Specificity" = conm$byClass[[2]],
-                        "Accuracy" = conm$overall[[1]],
-                        "Balanced_Accuracy" = conm$byClass[[11]],
-                        "AUC" = auc(mroc),
-                        "Threshold" = threshold,
-                        "Resample" = resample,
-                        "nrounds" = nrounds,
-                        "gamma" = gamma,
-                        "max_depth" = max_depth,
-                        "eta" = eta,
-                        "min_child_weight" = min_child_weight,
-                        "subsample" = subsample,
-                        "colsample_bytree" = colsample_bytree,
-                        "Model" = "xgb",
-                        "Time_seconds" = Sys.time() - time.start,
-                        "Executed" = Sys.time())
-  write.table(modeloutput,
-              file = output.file,
-              append = T,
-              row.names = F,
-              col.names = !file.exists(output.file),
-              sep = ",")}
-
-
 # Get training data
 getTrainingData <- function(resample, model){
   
-  if (model == "lg") {
+  if (model == "log") {
     data_train <- read_csv("data_train_lg.csv")
-  } else if (model == "xg") {
+  } else if (model == "xgb") {
     data_train <- read_csv("data_train_xg.csv")
-  } else if (model == "rf") {
+  } else if (model == "ran") {
     data_train <- read_csv("data_train_rf.csv")
   } else {stop("Unknown model param")}
   
-  
   data_train$default <- as.factor(data_train$default)
   
-  # Training data
   if (resample == "no") { #using raw unbalanced training dataset
     
     return(data_train)
     
-  } else if (resample == "under") { #undersampling
+  } else if (resample == "under") {
     
-    # Balancing training set (undersampling / equal size sampling)
+    # Undersampling / equal size sampling
     train_under <- downSample(data_train, data_train$default)
     train_under <- select(train_under, -c("Class")) #drop column
     
     return(train_under)
     
-  } else if (resample == "over") { #oversampling
+  } else if (resample == "over") {
     
     # SMOTE oversampling
     perc.over <- (summary(data_train$default)[[1]] / summary(data_train$default)[[2]] - 1) * 100 #percentage needed to balance classes
@@ -178,13 +84,39 @@ getTrainingData <- function(resample, model){
 }
 
 
-
-plot_ranger_importance <- function(model){
+# Function to plot feature importance from a ranger model
+plot_ranger_importance <- function(model){ #stolen with <3 from andre waage rivenæs
   importance(model) %>% 
     enframe() %>% 
     ggplot(aes(x = fct_reorder(name, value), y = value)) +
     geom_col(fill = "steelblue") +
     coord_flip() +
-    labs(x = NULL, title = "Variable importance for Ranger")}
+    labs(x = NULL, title = "Variable importance for Ranger")
+}
 
+
+# Plot AUC
+plotAUC <- function(probs) {
+  par(pty = "s")
+  roc(test$default, probs,
+      plot=TRUE, legacy.axes=TRUE, percent=TRUE,
+      xlab="False Positive Rate", ylab="True Positive Rate",
+      col="#02818a", lwd=3, print.auc=TRUE, print.auc.x=45, print.auc.col="#67a9cf")
+}
+
+
+
+
+# Write probabilities for RWA calculation
+writeProbs <- function(current_model, probs, filename) {
+  probs_write <- tibble("model" = current_model,
+                        "probs" = probs,
+                        "actual" = test$default)
+  write.table(probs_write,
+              file = filename,
+              append = T,
+              row.names = F,
+              col.names = !file.exists(filename),
+              sep = ",")
+}
 
