@@ -14,12 +14,14 @@ library(e1071)
 library(outliers)
 library(mltools)
 library(onehot)
+library(corrplot)
 library(BBmisc)
 library(scales)
 library(ROCR)
 library(pROC)
 library(xgboost)
 library(DMwR)
+library(tidymodels)
 graphics.off() #reset graphics
 rm(list = ls()) #clear workspace, variables
 options(scipen=999) #disable scientific notation
@@ -27,76 +29,131 @@ options(scipen=999) #disable scientific notation
 # Import data
 data <- read.csv("pd_data_v2.csv", sep = ";")
 
+# Data types
 data$default <- as.factor(data$default)
 data$industry <- as.factor(data$industry)
 
-
-# Preprocessing
-
 # Bad data
-data_outliers <- data %>%
-  filter_all(any_vars(. %in% c(-1e19, 1e19))) #filtering error values
-data_filtered <- setdiff(data, data_outliers) #removing values
+data[data == 1e19] <- NA
+data[data == -1e19] <- NA
 
-data_filtered <- subset(data_filtered, total_assets >= 0) #removing impossible bad observations
-
-
-
-data %>% group_by(default) %>% tally()
-
-data_filtered %>% group_by(default) %>% tally()
-
-# Feature engineering
-
-# Creating dummies
-data_filtered <- data_filtered %>% #dummy variables, 1 if negative, 0 if positive
-  mutate(d_pm_neg = if_else(profit_margin    < 0, 1, 0)) %>%
-  mutate(d_om_neg = if_else(operating_margin < 0, 1, 0)) %>%
-  mutate(d_em_neg = if_else(EBITDA_margin    < 0, 1, 0))
-
-# One hot encoding industry variable
-industry_dmy <- dummyVars(" ~ industry", data = data_filtered)
-industry_trsf <- data.frame(predict(industry_dmy, newdata = data_filtered)) #making new one hot encoded variables for each industry
-data_filtered <- bind_cols(data_filtered, industry_trsf) #appending new variables
-data_filtered <- select(data_filtered, -c("industry")) #drop original industry column
-
-
-
-
-
-
-
-
-
-
+data$unpaid_debt_collection[data$unpaid_debt_collection < 0] <- NA
+data$paid_debt_collection[data$paid_debt_collection < 0] <- NA
+data$amount_unpaid_debt[data$amount_unpaid_debt < 0] <- NA
 
 # Train test split
-set.seed(123)
-train.index <- createDataPartition(data_filtered$default, p = .75, list = FALSE) #stratified sampling
-train <- data_filtered[ train.index,]
-test  <- data_filtered[-train.index,]
+set.seed(9)
+train.index <- createDataPartition(data$default, p = .75, list = FALSE) #stratified sampling
+train <- data[ train.index,]
+test  <- data[-train.index,]
 
 
-# Winsorizing (capping)
-wins_cols <- c(2,4:14,17,19,20,23) #columns to apply capping
-for (i in wins_cols) {
-  qs <- quantile(train[,i], probs = c(.05, .95)) #top and bottom quantiles
-  train[,i] <- Winsorize(train[,i], minval = qs[1], maxval = qs[2]) #apply train data quantiles to both train and test data to avoid bias in cross validation
-  test[,i]  <- Winsorize(test[,i],  minval = qs[1], maxval = qs[2])
+# Create recipe
+rec <- recipe(default ~ ., data = train) %>%
+  step_meanimpute(all_numeric()) %>%
+  step_modeimpute(all_nominal()) %>%
+  step_zv(all_predictors()) %>%
+  step_mutate(
+    d_age_young = if_else(age_of_company <= 11, 1, 0),
+    liq_dif_12 = liquidity_ratio_1 - liquidity_ratio_2,
+    liq_dif_13 = liquidity_ratio_1 - liquidity_ratio_3,
+    liq_dif_23 = liquidity_ratio_2 - liquidity_ratio_3,
+    pmtr_over_pm = payment_reminders / profit_margin,
+    aao_times_pmtr = adverse_audit_opinion * payment_reminders,
+    udc_over_icr = unpaid_debt_collection / interest_coverage_ratio) %>%
+  step_log(
+    unpaid_debt_collection,
+    paid_debt_collection,
+    amount_unpaid_debt,
+    offset = 1) %>%
+  step_dummy(industry)
+
+# Train the recipe on the training set
+prec <- prep(rec, training = train)
+
+# Bake the data (apply the recipe to get the final datasets)
+mtrain <- juice(prec)
+mtest <- bake(prec, new_data = test)
+
+train <- as.data.frame(mtrain)
+test <- as.data.frame(mtest)
+
+
+# Write data (XGBoost)
+write.csv(train, file = "data_train_xg.csv", row.names = F)
+write.csv(test, file = "data_test_xg.csv", row.names = F)
+
+# Write data (Random forest)
+write.csv(train, file = "data_train_rf.csv", row.names = F)
+write.csv(test, file = "data_test_rf.csv", row.names = F)
+
+
+
+# Processing for logistic regression ===============
+
+# Winsorizing (capping), logit is bad at dealing with outliers and missing data
+wins_cols <- c("profit_margin", "operating_margin", "EBITDA_margin", "interest_coverage_ratio", "cost_of_debt",
+               "interest_bearing_debt", "revenue_stability", "equity_ratio", "equity_ratio_stability", "equity",
+               "total_assets", "unpaid_debt_collection", "paid_debt_collection", "amount_unpaid_debt",
+               "pmtr_over_pm", "aao_times_pmtr", "udc_over_icr")
+for (column in wins_cols) {
+  qs <- quantile(train[,column], probs = c(.05, .95)) #top and bottom quantiles
+  train[,column] <- Winsorize(train[,column], minval = qs[1], maxval = qs[2]) #apply train data quantiles to both train and test data to avoid data leakage
+  test[,column]  <- Winsorize(test[,column],  minval = qs[1], maxval = qs[2])
 }
 
 
+# Dropping variables based on VIF
+drop_cols <- c("liq_dif_12", "liq_dif_13", "liq_dif_23",
+               "liquidity_ratio_1", "liquidity_ratio_2",
+               "EBITDA_margin", "equity_ratio_stability",
+               "total_assets", "d_age_young")
 
-# Balancing training set (downsampling / equal size sampling)
-train <- downSample(train, train$default)
-train <- select(train, -c("Class")) #drop column
+train <- train %>% select(-drop_cols)
+test <- test %>% select(-drop_cols)
+
+viftrain <- train
+viftrain$default <- as.numeric(as.character(viftrain$default))
+
+lmfit <- (lm(default ~ ., data = viftrain))
+vif(lmfit)
+
+
+
+# Write data (Logistic regression)
+write.csv(train, file = "data_train_lg.csv", row.names = F)
+write.csv(test, file = "data_test_lg.csv", row.names = F)
 
 
 
 
-# Write data
-write.csv(train, file = "data_train.csv", row.names = F, append = F)
-write.csv(test, file = "data_test.csv", row.names = F, append = F)
+
+
+# PLOTTING ------------------------
+
+# Hist plot
+test %>%
+  keep(is.numeric) %>%
+  gather() %>%
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_histogram() +
+  theme_classic()
+
+
+# Corr matrix
+test$default <- as.numeric(as.character(test$default))
+test <- test %>% select(1:23)
+
+
+#1
+mydata.cor <- cor(test)
+corrplot(mydata.cor)
+
+#2
+palette = colorRampPalette(c("blue", "white", "red")) (20)
+heatmap(x = mydata.cor, col = palette, symm = TRUE)
+
 
 
 

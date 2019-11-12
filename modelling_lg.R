@@ -35,7 +35,7 @@ resample <- "under" # "no" for original dataset, "under" for undersampling, "ove
 current_model <- "log"
 
 # Import data
-train <- getTrainingData(resample, current_model) #lr: logistic regression and random forest, xg: xgboost.
+train <- getTrainingData(resample, current_model) #no, under, over : log, ran, xgb
 
 test <- read_csv("data_test_lg.csv")
 test$default <- as.factor(test$default)
